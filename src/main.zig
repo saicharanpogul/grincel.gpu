@@ -14,59 +14,106 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
+
+    if (args.len == 1) {
+        printUsage();
+        return;
+    }
+
+    var patterns = std.ArrayList(Pattern).empty;
+    defer {
+        for (patterns.items) |*p| p.deinit();
+        patterns.deinit(allocator);
+    }
+
+    var ignore_case = false;
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--ignore-case")) {
+            ignore_case = true;
+        } else if (std.mem.eql(u8, arg, "--starts-with")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            try parseAndAddPattern(allocator, &patterns, .startsWith, args[i], ignore_case);
+        } else if (std.mem.eql(u8, arg, "--ends-with")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            try parseAndAddPattern(allocator, &patterns, .endsWith, args[i], ignore_case);
+        } else if (std.mem.eql(u8, arg, "--starts-and-ends-with")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            try parseAndAddPattern(allocator, &patterns, .startsAndEndsWith, args[i], ignore_case);
+        } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            printUsage();
+            return;
+        }
+    }
+
+    if (patterns.items.len == 0) {
+        std.debug.print("Error: No patterns specified.\n", .{});
+        printUsage();
+        return;
+    }
+
     // Initialize GPU backend
     var gpu = try GpuManager.init(allocator);
     defer gpu.deinit();
 
-    // For now, skip shader loading since we're using stub implementations
-    try gpu.createComputePipeline("");
-
-    // Get pattern and options
-    const raw_pattern = try std.process.getEnvVarOwned(allocator, "VANITY_PATTERN");
-    defer allocator.free(raw_pattern);
-
-    const ignore_case = blk: {
-        const case_env = std.process.getEnvVarOwned(allocator, "IGNORE_CASE") catch "";
-        defer allocator.free(case_env);
-        break :blk std.mem.eql(u8, case_env, "1") or
-            std.mem.eql(u8, case_env, "true") or
-            std.mem.eql(u8, case_env, "yes");
-    };
-
-    var pattern = try Pattern.init(allocator, raw_pattern, .{ .ignore_case = ignore_case });
-    defer pattern.deinit();
 
     std.debug.print("Using GPU backend: {s}\n", .{@tagName(gpu.backend)});
-    std.debug.print("Pattern: {s} ({} fixed characters)\n", .{ pattern.raw, pattern.fixed_chars.len });
-    std.debug.print("Case-sensitive: {}\n", .{!pattern.options.ignore_case});
-
-    // Run benchmark if --benchmark flag is present
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
-
-    if (args.len > 1 and std.mem.eql(u8, args[1], "--benchmark")) {
-        var benchmark = Benchmark.init(allocator, &gpu);
-        const result = try benchmark.run(pattern.raw);
-        Benchmark.printResults(result);
-        return;
-    }
+    std.debug.print("Patterns current: {d}\n", .{patterns.items.len});
+    std.debug.print("Case-sensitive: {}\n", .{!ignore_case});
 
     // Normal vanity address search
-    std.debug.print("Searching for Solana addresses matching pattern...\n", .{});
+    std.debug.print("Searching for Solana addresses matching patterns...\n", .{});
 
     // Initialize compute resources
-    var search_state = try SearchState.init(allocator, &pattern);
+    var search_state = try SearchState.init(allocator, patterns.items);
     defer search_state.deinit();
 
     // Main search loop
-    while (!search_state.found) {
+    while (!search_state.all_done) {
         try gpu.dispatchCompute(&search_state, WORKGROUP_SIZE);
         try search_state.checkResults();
     }
 
-    // Print results
-    const keypair = search_state.getFoundKeypair();
-    std.debug.print("\nFound matching keypair!\n", .{});
-    std.debug.print("Public: {s}\n", .{keypair.public});
-    std.debug.print("Private: {s}\n", .{keypair.private});
+    std.debug.print("\nAll target matches found!\n", .{});
+}
+
+fn printUsage() void {
+    std.debug.print(
+        \\Usage: grincel [options]
+        \\Options:
+        \\  --starts-with <PREFIX>[:COUNT]              Find addresses starting with PREFIX
+        \\  --ends-with <SUFFIX>[:COUNT]                Find addresses ending with SUFFIX
+        \\  --starts-and-ends-with <PRE>:<SUF>[:COUNT]  Find addresses starting with PRE and ending with SUF
+        \\  --ignore-case                               Case-insensitive matching
+        \\  --help, -h                                  Show this help
+        \\
+    , .{});
+}
+
+fn parseAndAddPattern(
+    allocator: std.mem.Allocator,
+    patterns: *std.ArrayList(Pattern),
+    mode: @import("pattern.zig").PatternMode,
+    raw_arg: []const u8,
+    ignore_case: bool,
+) !void {
+    var parts = std.mem.splitScalar(u8, raw_arg, ':');
+    const part1 = parts.next() orelse return error.InvalidFormat;
+
+    if (mode == .startsAndEndsWith) {
+        const part2 = parts.next() orelse return error.InvalidFormat;
+        const count_str = parts.next();
+        const count = if (count_str) |s| try std.fmt.parseInt(usize, s, 10) else 1;
+        try patterns.append(allocator, try Pattern.init(allocator, mode, part1, part2, count, .{ .ignore_case = ignore_case }));
+    } else {
+        const count_str = parts.next();
+        const count = if (count_str) |s| try std.fmt.parseInt(usize, s, 10) else 1;
+        try patterns.append(allocator, try Pattern.init(allocator, mode, part1, null, count, .{ .ignore_case = ignore_case }));
+    }
 }

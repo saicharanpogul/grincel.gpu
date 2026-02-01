@@ -35,17 +35,12 @@ pub const GpuManager = struct {
         }
     }
 
-    pub fn createComputePipeline(self: *GpuManager, shader_code: []const u8) !void {
-        switch (self.backend) {
-            .vulkan => return self.impl.vulkan.createComputePipeline(shader_code),
-            .metal => return self.impl.metal.createComputePipeline(shader_code),
-        }
-    }
 
     pub fn dispatchCompute(self: *GpuManager, state: ?*SearchState, workgroup_size: u32) !void {
+        const state_ptr = state orelse return error.NoState;
         switch (self.backend) {
-            .vulkan => return self.impl.vulkan.dispatchCompute(state, workgroup_size),
-            .metal => return self.impl.metal.dispatchCompute(state, workgroup_size),
+            .vulkan => return self.impl.vulkan.dispatchCompute(state_ptr, workgroup_size),
+            .metal => return self.impl.metal.dispatchCompute(state_ptr, workgroup_size),
         }
     }
 };

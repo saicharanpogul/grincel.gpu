@@ -8,15 +8,15 @@ pub const Keypair = struct {
 
 pub const SearchState = struct {
     allocator: std.mem.Allocator,
-    pattern: *Pattern,
-    found: bool,
+    patterns: []Pattern,
+    all_done: bool,
     keypair: ?Keypair,
 
-    pub fn init(allocator: std.mem.Allocator, pattern: *Pattern) !SearchState {
+    pub fn init(allocator: std.mem.Allocator, patterns: []Pattern) !SearchState {
         return SearchState{
             .allocator = allocator,
-            .pattern = pattern,
-            .found = false,
+            .patterns = patterns,
+            .all_done = false,
             .keypair = null,
         };
     }
@@ -29,9 +29,14 @@ pub const SearchState = struct {
     }
 
     pub fn checkResults(self: *SearchState) !void {
-        _ = self; // autofix
-        // TODO: Check GPU results and update state
-        // This would be implemented based on the specific GPU backend
+        var done = true;
+        for (self.patterns) |pattern| {
+            if (pattern.found_count < pattern.target_count) {
+                done = false;
+                break;
+            }
+        }
+        self.all_done = done;
     }
 
     pub fn getFoundKeypair(self: *SearchState) Keypair {

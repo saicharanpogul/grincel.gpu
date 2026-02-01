@@ -11,7 +11,7 @@ pub const Ed25519 = struct {
         var key_pair: KeyPair = undefined;
 
         // Create a key pair from the seed
-        var kp = crypto.sign.Ed25519.KeyPair.create(seed[0..32].*) catch unreachable;
+        var kp = crypto.sign.Ed25519.KeyPair.generateDeterministic(seed[0..32].*) catch unreachable;
 
         // Copy the public key bytes
         const pub_bytes = kp.public_key.toBytes();
